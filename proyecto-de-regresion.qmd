@@ -1,0 +1,1216 @@
+---
+title: "Proyecto Regresión"
+author: "Juan Manuel Diaz Larrea"
+format: 
+  pdf:
+    latex-engine: xelatex
+    df-print: kable
+    keep-tex: true
+    extra-dependencies: ["float"]
+editor: visual
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(fig.pos="H")
+
+```
+
+## Contextualizacion sobre lo que se quiere modelar
+
+El presente análisis tiene como propósito identificar los factores asociados al **puntaje total de focalización definitivo** para los hogares encuestados.
+
+Este puntaje corresponde al valor calculado por el Sistema de Identificación de Potenciales Beneficiarios de Programas Sociales (SISBÉN), el cual se obtiene mediante un modelo estadístico que integra información sobre las condiciones de vida de los hogares, incluyendo variables relacionadas con educación, salud, ingresos, vivienda, empleo y acceso a servicios públicos.
+
+El resultado es un índice continuo que refleja el nivel de bienestar del hogar: valores más altos indican mejores condiciones socioeconómicas, mientras que valores más bajos representan mayores niveles de vulnerabilidad. Este indicador es utilizado por el Estado colombiano para orientar la focalización de programas sociales y subsidios.
+
+Según el Departamento Nacional de Planeación (DNP, 2021), el cálculo del puntaje se realiza a partir de la información recolectada en la encuesta SISBÉN IV y se estima mediante una metodología basada en modelos econométricos y técnicas de predicción del ingreso permanente del hogar
+
+Para modelar esta variable de respuesta, se consideran distintas covariables explicativas que describen la composición y características del hogar:
+
+-   **¿En su hogar cuántas personas tienen discapacidad?**\
+    Indica el número de miembros del hogar con algún tipo de discapacidad. Se espera que una mayor cantidad de personas con discapacidad incremente la vulnerabilidad y, por tanto, se asocie con un puntaje de focalización más bajo.
+
+-   **¿Cuántas personas conforman su hogar?**\
+    Refleja el tamaño total del hogar. Hogares más grandes pueden enfrentar mayores dificultades económicas, afectando negativamente el puntaje.
+
+-   **¿Cuántas personas menores de 18 años hacen parte de su hogar?**\
+    Representa la cantidad de dependientes menores de edad, lo cual puede incidir en las necesidades alimentarias y educativas del hogar.
+
+-   **¿Cuántas personas de 60 o más años hacen parte de su hogar?**\
+    Indica la presencia de adultos mayores, quienes suelen requerir más apoyo y cuidados, influyendo también en la vulnerabilidad del hogar.
+
+-   **Suma ELCSA**\
+    Corresponde al número total de respuestas afirmativas en el módulo de inseguridad alimentaria (Escala Latinoamericana y Caribeña de Seguridad Alimentaria – ELCSA). Un valor más alto sugiere mayor inseguridad alimentaria.
+
+-   **SISBEN 3**\
+    Representa el puntaje que el Sistema de Identificación de Potenciales Beneficiarios de Programas Sociales (SISBÉN) asigna a cada hogar, reflejando su nivel socioeconómico dentro de una escala que va desde condiciones de mayor vulnerabilidad hasta mejores niveles de bienestar.
+
+Además, se incluye como variable categórica de control la **Clasificación ELCSA con 18**, la cual agrupa los hogares según su nivel de inseguridad alimentaria (inseguridad alimentaria, leve, moderada o severa).
+
+El objetivo principal de este estudio es determinar qué factores del hogar tienen mayor influencia sobre el puntaje de focalización, con el fin de generar información útil para la toma de decisiones en políticas sociales y programas de ayuda, de esta manera, el modelo de regresión lineal múltiple permitirá cuantificar el efecto de cada covariable sobre el puntaje total y evaluar la pertinencia de dichas variables para explicar las diferencias entre hogares.
+
+```{r}
+#| echo: false
+#| warning: false
+library(ggplot2)
+library(corrplot)
+library(readxl)
+library(GGally)
+library(car)
+library(leaps)
+library(MASS)
+library(glmnet)
+library(olsrr)
+library(lmtest)
+
+
+# 1 Cargar la base de datos manualmente
+data <- read_excel("sub_base_regresion.xlsx")
+
+
+# 2 Definir variable dependiente y variable categórica
+
+y <- "PUNTAJE TOTAL FOCALIZACIÓN DEFINITIVO"
+cat_var <- "CLASIFICACIÓN ELCSA CON 18"
+
+# Nos quedamos con las variables numéricas
+num_data <- data[, sapply(data, is.numeric)]
+
+```
+
+# Re-nombramiento de cada variable
+
+```{r}
+#| echo: false
+#| warning: false
+# MATRIZ DE ANALISIS DESCRIPTIVO 
+# Cargar la base de datos
+data <- read_excel("sub_base_regresion.xlsx")
+
+# Filtrar solo las variables numericas
+num_data <- data[, sapply(data, is.numeric)]
+
+# Renombrar las variables numericas
+old_names <- names(num_data)
+new_names <- paste0("x", seq_along(old_names))
+colnames(num_data) <- new_names
+
+# Mostrar nombres
+name_map <- data.frame(Nueva = new_names, Original = old_names)
+print(name_map)
+
+
+# Crear matriz de graficos
+gg2 <- ggpairs(
+  num_data,
+  upper = list(continuous = wrap("smooth", alpha = 0.3, size = 1.2, method = "lm")),
+  lower = list(continuous = "cor"),
+  diag = list(continuous = wrap("barDiag", fill = "lightgoldenrod1", color = "red"))
+)
+
+
+
+
+```
+
+Para efectos del análisis, la variable x7 (Puntaje Total de Focalización Definitivo) se considerará como la variable respuesta del modelo de regresión (Y).
+
+# Análisis Descriptivo
+
+![Matriz de correlación entre las variables numéricas utilizadas en el análisis.](images/clipboard-4004033304.png){fig-cap="Matriz de correlación entre las variables numéricas utilizadas en el análisis."}
+
+-   x2-x3 presentan una alta correlación positiva y estadísticamente significativa, indica que estas dos variables se mueven fuertemente en la misma dirección y podría ser un foco de colinealidad si ambas se incluyen en un modelo.
+
+-   x6-x7 tienen una correlación negativa moderada, también significativa, por lo que a medida que x6 aumenta, x7 tiende a disminuir y tambien tiende a explicar bien a x7
+
+-   x5-x7 tienen una correlación positiva moderada a fuerte, significativa, lo cual es un indicio de que x5 es la covariable que mas aporta para explicar x7.
+
+-   Algunos histogramas (como los de x1, x3, x4) muestran distribuciones sesgadas
+
+-   En conclusión el análisis descriptivo revela que la mayoría de las variables presentan correlaciones débiles, excepto algunas con relaciones fuertes o moderadas. Estas correlaciones podrían indicar dependencias entre predictores que conviene revisar antes de construir un modelo de regresión, ya que pueden afectar la estabilidad de los coeficientes.\
+
+# Creación del modelo FULL
+
+```{r}
+#| echo: false
+#| warning: false
+
+source("FuncionesdeUsuarioRLM.R.txt") 
+
+modelo <- lm(formula = x7 ~ ., data = num_data)
+# Mostrar resumen del modelo 
+summary(modelo)
+
+# ANOVA del modelo
+cat("\nANOVA del modelo:\n")
+MiAnova(model=modelo)
+
+
+
+```
+
+Modelo ajustado: $\hat{Y} = 57.9115 - 0.7836x_1 + 0.546x_2 + 0.5041x_3 - 0.3299x_4 + 2.0244x_5 - 0.2782x_6$
+
+El modelo resulta globalmente significativo, dado que el valor p asociado al estadístico T es 5.733 × 10⁻¹³, el cual es menor que el nivel de significancia de 0.05. Por tanto, existe evidencia suficiente para rechazar la hipótesis nula (H₀) que plantea que el modelo no explica significativamente la variable respuesta.\
+
+Además, el coeficiente de determinación (R²) indica que el modelo explica aproximadamente el 51.83 % de la variabilidad total de la variable dependiente, lo que representa una capacidad explicativa moderada.
+
+# Métodos para seleccionar los modelos candidatos
+
+```{r}
+#| echo: false
+#| warning: false
+
+
+# Cargar la base
+data <- read_excel("sub_base_regresion.xlsx")
+num_data <- data[, sapply(data, is.numeric)]
+old_names <- names(num_data)
+new_names <- paste0("x", seq_along(old_names))
+colnames(num_data) <- new_names
+
+# Definir variable respuesta y matriz de predictores
+y <- num_data$x7
+X <- as.matrix(num_data[, -7])
+
+# a) REGRESION LASSO
+
+set.seed(123)
+lasso_model <- cv.glmnet(X, y, alpha = 1)
+#coef(lasso_model, s = "lambda.min")
+
+cat("\n--- Modelo LASSO ---\n")
+#print(lasso_model)
+
+# Para ver el modelo final con variables seleccionadas
+lambda_opt <- lasso_model$lambda.min
+#cat("\nLambda óptimo:", lambda_opt, "\n")
+#cat("Coeficientes seleccionados (no cero):\n")
+print(coef(lasso_model, s = lambda_opt))
+
+
+# b) Selección segun R^2 ajustado
+
+adjr2_model <- regsubsets(x7 ~ ., data = num_data, nbest = 1, nvmax = 6)
+adjr2_summary <- summary(adjr2_model)
+
+cat("\n--- Selección por R² ajustado ---\n")
+best_r2 <- which.max(adjr2_summary$adjr2)
+cat("Mejor modelo:", best_r2, "variables\n")
+print(adjr2_summary$which[best_r2, ])
+
+# Ajustar el modelo final
+vars_best_r2 <- names(which(adjr2_summary$which[best_r2, ]))[-1]
+modelo_r2 <- lm(as.formula(paste("x7 ~", paste(vars_best_r2, collapse = "+"))), data = num_data)
+#summary(modelo_r2)
+#anova(modelo_r2)
+
+# c) Seleccion por C_p
+
+cp_best <- which.min(adjr2_summary$cp)
+cat("\n--- Selección por Cp ---\n")
+print(adjr2_summary$which[cp_best, ])
+vars_best_cp <- names(which(adjr2_summary$which[cp_best, ]))[-1]
+modelo_cp <- lm(as.formula(paste("x7 ~", paste(vars_best_cp, collapse = "+"))), data = num_data)
+#summary(modelo_cp)
+#anova(modelo_cp)
+
+
+# d) Stepwise
+
+modelo_full <- lm(x7 ~ ., data = num_data)
+modelo_stepwise <- stepAIC(modelo_full, direction = "both", trace = FALSE)
+cat("\n--- Stepwise ---\n")
+#summary(modelo_stepwise)
+#anova(modelo_stepwise)
+print(modelo_stepwise)
+
+# e) Selección hacia adelante (Forward)
+
+# Definir el modelo completo 
+modelo_full <- lm(x7 ~ x1 + x2 + x3 + x4 + x5 + x6, data = num_data)
+
+# Selección hacia adelante
+modelo_forward <- ols_step_forward_p(modelo_full, penter = 0.05)
+
+#modelo_forward
+
+vars_sel <- modelo_forward$model # esto trae el modelo en texto
+cat("\n--- forward ---\n")
+
+# Ajustar modelo final con las variables seleccionadas
+modelo_forward_final <- lm(as.formula(vars_sel), data = num_data)
+
+# Mostrar resumen y ANOVA
+#summary(modelo_forward_final)
+#anova(modelo_forward_final)
+print(modelo_forward_final)
+
+# f) Selección hacia atrás (Backward)
+
+modelo_backward <- ols_step_backward_p(modelo_full, prem = 0.05)
+
+# Verificamos si el objeto tiene la fórmula guardada
+if (!is.null(modelo_backward$model)) {
+  # Si tiene la formula completa, la usamos directamente
+  formula_backward <- as.formula(modelo_backward$model)
+} else if (!is.null(modelo_backward$formula)) {
+  # O si esta bajo el nombre "formula"
+  formula_backward <- as.formula(modelo_backward$formula)
+} else if (!is.null(modelo_backward$predictors)) {
+  # Si solo tiene los nombres de las variables predictoras
+  vars <- paste(modelo_backward$predictors, collapse = " + ")
+  formula_backward <- as.formula(paste("x7 ~", vars))
+} else {
+  stop("No se pudo extraer la fórmula del modelo Backward.")
+}
+
+# Ajuste del modelo final Backward
+cat("\n--- Backward ---\n")
+modelo_backward_final <- lm(formula_backward, data = num_data)
+#summary(modelo_backward_final)
+#anova(modelo_backward_final)
+print(modelo_backward_final)
+
+```
+
+**Modelo Lasso**= Modelo seleccionado por el método Lasso.
+
+**Modelo simple**= Modelo seleccionado por los demás métodos.
+
+```{r}
+#| echo: false
+#| warning: false
+# Modelo 1 (Stepwise / R² / Cp / Forward / Backward)
+modelo_simple <- lm(x7 ~ x2 + x5 + x6, data = num_data)
+
+# Modelo 2 (LASSO)
+coef_lasso <- coef(lasso_model, s = "lambda.min")
+vars_lasso <- rownames(coef_lasso)[coef_lasso[, 1] != 0]
+vars_lasso <- vars_lasso[vars_lasso != "(Intercept)"]
+formula_lasso <- as.formula(paste("x7 ~", paste(vars_lasso, collapse = " + ")))
+modelo_lasso_lm <- lm(formula_lasso, data = num_data)
+
+cat("\n--- Resumen y ANOVA del modelo Simple ---\n")
+summary(modelo_simple)
+MiAnova(model=modelo_simple)
+
+cat("\n--- Resumen y ANOVA del modelo Lasso ---\n")
+summary(modelo_lasso_lm)
+MiAnova(model=modelo_lasso_lm)
+
+
+
+```
+
+Tras aplicar los distintos métodos de selección de variables (**Stepwise**, **R²**, **Cp**, **Forward** y **Backward**), se observa que todos coinciden en proponer el mismo modelo: **Y \~ x2 + x5 + x6**.\
+
+La única excepción es el método **LASSO**, que sugiere un modelo ligeramente diferente al incluir una variable adicional, quedando como: **Y \~ x2 + x3 + x5 + x6**.
+
+# Selección de modelo final
+
+## Comprobación del supuesto de normalidad
+
+```{r}
+#| echo: false
+#| warning: false
+
+# Modelo 1 (Stepwise / R² / Cp / Forward / Backward)
+modelo_simple <- lm(x7 ~ x2 + x5 + x6, data = num_data)
+
+# Modelo 2 (LASSO)
+coef_lasso <- coef(lasso_model, s = "lambda.min")
+vars_lasso <- rownames(coef_lasso)[coef_lasso[, 1] != 0]
+vars_lasso <- vars_lasso[vars_lasso != "(Intercept)"]
+formula_lasso <- as.formula(paste("x7 ~", paste(vars_lasso, collapse = " + ")))
+modelo_lasso_lm <- lm(formula_lasso, data = num_data)
+
+# Graficos Q-Q con estadistico W y p-valor (Modelo Simple y LASSO)
+
+# Test de normalidad Shapiro–Wilk
+#test_simple <- shapiro.test(rstudent(modelo_simple))
+#test_lasso  <- shapiro.test(rstudent(modelo_lasso_lm))
+
+# Modelo Simple
+#qqnorm(rstudent(modelo_simple),
+ #      main = "Q-Q Plot - Modelo Simple",
+  #     cex = 1.5, pch = 19, col = "blue")
+#qqline(rstudent(modelo_simple), col = "red", lwd = 2)
+#legend("topleft",
+ #      legend = rbind(c("Statistic W", "p-value"),
+                      #round(c(test_simple$statistic, test_simple$p.value), 4)),
+  #     cex = 0.9, bty = "n")
+
+# Modelo LASSO 
+#qqnorm(rstudent(modelo_lasso_lm),
+  #     main = "Q-Q Plot - Modelo LASSO",
+ #      cex = 1.5, pch = 19, col = "green")
+#qqline(rstudent(modelo_lasso_lm), col = "red", lwd = 2)
+#legend("topleft",
+       #legend = rbind(c("Statistic W", "p-value"),
+        #              round(c(test_lasso$statistic, test_lasso$p.value), 4)),
+       #cex = 0.9, bty = "n")
+
+
+```
+
+```{r}
+#| echo: false
+#| warning: false
+#| label: fig-qq-simple
+#| fig-cap: "Gráfico Q-Q para los residuales del Modelo Simple"
+#| fig-width: 6
+#| fig-height: 6
+
+test_simple <- shapiro.test(rstudent(modelo_simple))
+
+qqnorm(rstudent(modelo_simple),
+       main = "",
+       cex = 1.5, pch = 19, col = "blue")
+qqline(rstudent(modelo_simple), col = "red", lwd = 2)
+legend("topleft",
+       legend = rbind(c("Statistic W", "p-value"),
+                      round(c(test_simple$statistic, test_simple$p.value), 4)),
+       cex = 0.9, bty = "n")
+
+
+
+```
+
+El gráfico Q–Q muestra que los residuos se alinean casi perfectamente con la recta teórica de la normalidad, lo cual indica que su distribución es altamente consistente con una distribución normal. Salvo por unas pocas observaciones en los extremos, donde pequeños desvíos son comunes y esperable, la gran mayoría de los puntos sigue de manera estrecha la línea de referencia.
+
+Esto es coherente con el resultado de la prueba de Shapiro–Wilk (W = 0.9936, p-valor = 0.9212), cuyo p-valor elevado indica que no existe evidencia estadística para rechazar la hipótesis de normalidad.
+
+En conjunto, tanto la inspección visual como la prueba formal confirman que el modelo cumple de manera sobresaliente el supuesto de normalidad de los errores, sin indicios de problemas relevantes en este aspecto.
+
+```{r}
+#| echo: false
+#| warning: false
+#| label: fig-qq-lasso
+#| fig-cap: "Gráfico Q-Q para los residuales del Modelo LASSO"
+#| fig-width: 6
+#| fig-height: 6
+
+test_lasso <- shapiro.test(rstudent(modelo_lasso_lm))
+
+qqnorm(rstudent(modelo_lasso_lm),
+       main = "",
+       cex = 1.5, pch = 19, col = "green")
+qqline(rstudent(modelo_lasso_lm), col = "red", lwd = 2)
+legend("topleft",
+       legend = rbind(c("Statistic W", "p-value"),
+                      round(c(test_lasso$statistic, test_lasso$p.value), 4)),
+       cex = 0.9, bty = "n")
+
+
+
+```
+
+Al igual que en el Q-Q del modelo simple este cumple muy bien con el supuesto de normalidad donde casi todas las observaciones se ajustan bien a la linea teórica con pequeñas desviaciones en algunos caso.
+
+Esto es coherente con el resultado de la prueba de Shapiro-Wilk (W = 0.9928, p-valor = 0.8728), cuyo elevado indica que no existe evidencia estadística para rechazar la hipótesis de normalidad.
+
+Por lo tanto el modelo Lasso también cumple bien con el supuesto de normalidad.
+
+## Comprobación del supuesto de varianza constante
+
+```{r}
+#| echo: false
+#| warning: false
+#| label: fig-residuos-ajustados-simple
+#| fig-cap: "Gráfico de residuos estudentizados vs valores ajustados para el Modelo Simple"
+#| fig-width: 6
+#| fig-height: 6
+
+plot(modelo_simple$fitted.values, rstudent(modelo_simple),
+     main = "",
+     xlab = "Puntaje de focalización ajustado",
+     ylab = "Residuos",
+     pch = 19,
+     col = "steelblue")
+abline(h = 0, col = "red")
+
+
+# Prueba de Breusch-Pagan para el modelo simple
+#bptest(modelo_simple)
+
+# Prueba de Breusch-Pagan para el modelo LASSO
+#bptest(modelo_lasso_lm)
+
+
+
+
+```
+
+En el gráfico de residuos versus valores ajustados del modelo simple, no se observa un patrón definido ni una tendencia sistemática en la dispersión de los puntos. Los residuos se distribuyen de manera relativamente uniforme alrededor de la línea horizontal en cero, sin evidenciar un aumento o disminución progresiva de su amplitud a lo largo del eje de los valores ajustados.
+
+Aunque pueden apreciarse algunas observaciones ligeramente más dispersas en ciertos rangos, estas no conforman un patrón de “U” ni indican heterocedasticidad evidente. Por lo tanto, la variabilidad de los residuos parece mantenerse aproximadamente constante, lo que respalda el cumplimiento del supuesto de homocedasticidad.
+
+```{r}
+#| echo: false
+#| warning: false
+#| label: fig-residuos-ajustados-lasso
+#| fig-cap: "Gráfico de residuos estudentizados vs valores ajustados para el Modelo LASSO"
+#| fig-width: 6
+#| fig-height: 6
+
+plot(modelo_lasso_lm$fitted.values, rstudent(modelo_lasso_lm),
+     main = "",
+     xlab = "Puntaje de focalización ajustado",
+     ylab = "Residuos",
+     pch = 19,
+     col = "darkgreen")
+abline(h = 0, col = "red")
+
+```
+
+La amplitud de los residuos se mantiene relativamente constante para todo el rango de valores ajustados, lo cual sugiere que no hay indicios claros de heterocedasticidad. Aunque existen algunos puntos más alejados del centro, su presencia es esporádica y no forma un patrón que comprometa el supuesto.
+
+En conjunto, la distribución observada respalda que el modelo Lasso cumple adecuadamente con el supuesto de varianza constante, por lo que la estimación de los coeficientes y la inferencia derivada del modelo pueden considerarse confiables bajo este criterio.
+
+## Comprobación del supuesto de multicolinealidad (VIF)
+
+```{r}
+#| echo: false
+#| warning: false
+
+vif_simple <- vif(modelo_simple)
+vif_lasso  <- vif(modelo_lasso_lm)
+
+vif_simple
+vif_lasso
+
+```
+
+Tanto el modelo simple como el modelo Lasso no presentan problemas de multicolinealidad.
+
+-   El modelo simple muestra una independencia casi total entre sus predictores.
+
+-   El modelo Lasso presenta una correlación moderada en x2 y x3, pero dentro de niveles completamente aceptables.
+
+Por lo tanto, en ambos casos la inferencia del modelo no se ve comprometida por este supuesto.
+
+## Conclusión:
+
+Ambos modelos cumplen adecuadamente con los supuestos de la regresión lineal, sin embargo, se opta por conservar el primer modelo (Y \~ x2 + x5 + x6) debido a que es más parsimonioso, es decir, logra un buen ajuste utilizando un menor número de variables explicativas, lo que favorece la simplicidad y la interpretabilidad del modelo sin comprometer su capacidad predictiva.
+
+# Coeficientes de regresión estandarizados
+
+```{r}
+#| echo: false
+#| warning: false
+source("FuncionesdeUsuarioRLM.R.txt")
+miscoeficientes(modelo_simple)
+```
+
+La variable **"SUMA ELCSA"** (x5) tiene el coeficiente estandarizado más alto en valor absoluto (0.5801). Por tanto, es la variable que más aporta a explicar la variabilidad de la respuesta.
+
+# Significancia individual
+
+```{r}
+#| echo: false
+#| warning: false
+summary(modelo_simple)
+```
+
+$H_0: \beta_j = 0$
+
+$H_1: \beta_j \neq 0$
+
+**El estadístico de prueba es:**
+
+$t_j = \frac{\hat{\beta}_j}{EE(\hat{\beta}_j)} \sim t_{n-k-1}$
+
+con (n = 100) observaciones y (k = 3) predictores, por lo que (grados de libertad = 96)\
+El valor crítico bilateral para $\alpha = 0.05$ es $t_{0.975,96} = 1.985$
+
+**Prueba para** $\beta_2:$
+
+$t_2 = \frac{0.76308}{0.40073} = 1.904$
+
+$|t_2| = 1.904 < 1.985 \Rightarrow$ no se rechaza $H_0$
+
+**Prueba para** $\beta_5:$
+
+$t_5 = \frac{2.02519}{0.24878} = 8.140$
+
+$|t_5| = 8.140 > 1.985 \Rightarrow$ se rechaza $H_0$
+
+**Prueba para** $\beta_6:$
+
+$t_6 = \frac{-0.28005}{0.05982} = -4.682$
+
+$|t_6| = 4.682 > 1.985 \Rightarrow$ se rechaza $H_0$
+
+# prueba F
+
+Se seleccionó evaluar únicamente el coeficiente de x2 mediante una prueba F parcial porque, según los resultados de las pruebas t, este fue el único predictor cuyo p-valor individual (0.0599) no resultó significativo al nivel del 5%, pero fue muy cercano a este. En contraste, los coeficientes de x5 y x6 fueron altamente significativos. Por ello, se planteó determinar formalmente mediante una prueba F si la variable x2 puede ser significativa.
+
+```{r}
+#| echo: false
+#| warning: false
+linearHypothesis(modelo_simple,c("x2=0"))
+```
+
+se desea probar si "$\beta_2$" es no significativo
+
+**Prueba F para** $\beta_2$ :
+
+$H_0: \beta_2 = 0$
+
+$H_1: \beta_2 \neq 0$
+
+$MF= y = \beta_0 + \beta_2x_2 + \beta_5x_5 + \beta_6x_6 + \varepsilon$
+
+$MR= y = \beta_0 + \beta_5x_5 + \beta_6x_6 +\varepsilon$
+
+**Estadístico de prueba:**
+
+$F = \frac{(RSS_R - RSS_C)/q}{RSS_C/(n - p_C)}$
+
+$RSS_R = 6176.2$
+
+$RSS_F = 5946.6$
+
+$RSS_R - RSS_F = 224.6$
+
+$q = 1$
+
+$n - p_C = 96$
+
+$F = \frac{(224.6/1)}{5946.6/96} = \frac{224.6}{61.9} \approx 3.6261$
+
+**Distribución del estadístico:**
+
+$F \sim F_{(1,96)}$
+
+**P-valor:**
+
+$p-valor = P(F_{(1,96)} \geq 3.6261) = 0.05987$
+
+**Conclusión:**
+
+se obtiene un p-valor de **0.05987** \> 0.05.\
+Por lo tanto, **no se rechaza la hipótesis nula**, lo que indica que la variable "¿Cuántas personas conforman su hogar?" (x2) no aporta evidencia estadísticamente significativa para explicar la variable respuesta“Puntaje Total de Focalización Definitivo” (Y) dentro del modelo, cuando ya se incluyen las variables x5 y x6.
+
+No obstante, dado que el p-valor es menor a 0.10, puede considerarse que la variable presenta una tendencia a ser marginalmente significativa, pero no alcanza el nivel requerido para justificar su inclusión bajo criterios estrictos de significancia estadística.
+
+# Diagnostico de presencia de observaciones atípicas, de balanceo y/o influencíales
+
+```{r}
+#| echo: false
+#| warning: false
+diag_obs(model=modelo_simple,plot.add=TRUE)
+```
+
+## Influenciables:
+
+**DF Betas:**
+
+$\widehat{\beta_0}$= 7, 9, 21, 36, 45, 52, 53, 67, 73, 82
+
+$\widehat{\beta_2}$= 10, 37, 51, 67, 73
+
+$\widehat{\beta_5}$= 9, 21, 53, 59, 82, 88
+
+$\widehat{\beta_6}$= 9, 14, 45, 52, 78, 88
+
+**Dffits:**
+
+21, 45, 53, 67, 88
+
+**Distancias de Cook:**
+
+21, 45, 53, 67, 88
+
+Todas las observaciones anteriores son candidatas a ser consideradas observaciones influenciables.
+
+## De balanceo:
+
+**valores hat:**
+
+7, 9, 33, 51, 52, 57, 67, 74, 88
+
+Todas las observaciones anteriores son candidatas a ser consideradas observaciones de balanceo.
+
+## Outlaiers:
+
+**Residuales estandarizados:**
+
+45, 50, 59, 73, 82
+
+Todas las observaciones anteriores son candidatas a ser consideradas outlaiers.
+
+## Conclusiones:
+
+En general, las observaciones (21, 45, 53, 67 y 88 se repiten en varias medidas, por lo que se consideran puntos altamente influyentes.
+
+\
+Por su parte, las observaciones (45, 50, 58, 73 y 82) presentan residuales grandes, siendo posibles outliers.
+
+\
+Las observaciones con altos valores de leverage (7, 9, 33, 51, 52, 57, 67, 74, 88) corresponden a puntos de balanceo, es decir, aquellas con valores extremos en las variables explicativas.
+
+# Eliminación de observaciones
+
+Se decidió sacar las observaciones 45, 21, 53, 67, 73, 88, 9, 52 y 82.\
+**Modelo clean** = Nuevo modelo sin observaciones problemáticas escogidas.
+
+```{r}
+#| echo: false
+#| warning: false
+
+# Reajuste del modelo sin observaciones problematicas
+
+# Observaciones a eliminar 
+obs_out <- c(45, 21, 53, 67, 73, 88, 9, 52, 82)
+
+# Crear nueva base de datos sin esas filas
+num_data_clean <- num_data[-obs_out, ]
+
+# Ajustar nuevamente el modelo de regresión multiple
+modelo_clean <- lm(x7 ~ x2 + x5 + x6, data = num_data_clean)
+
+# Mostrar la tabla de parametros ajustados
+summary(modelo_clean)
+
+```
+
+## Conclusiones:
+
+Tras eliminar las observaciones problemáticas, se ajustó nuevamente el modelo de regresión. Se observa que las estimaciones de los parámetros, presentan algunos cambios drásticos: el intercepto $\beta_0$ aumenta aproximadamente en 2.45% el cual no es muy significativo, mientras que los coeficientes $\beta_j$ muestran variaciones, de 4.51%(x2), 9.68%(x5) y 18.15%(x6), siendo estas ultimas 2 las variaciones que son un poco mas relevantes. Los errores estándar permanecen prácticamente iguales, lo que indica que la precisión de las estimaciones se mantiene estable.
+
+Sin embargo, el cambio más relevante se presenta en la significancia estadística de los coeficientes: el parámetro $\beta_2$, que antes no era significativo, ahora resulta significativo al considerar las demás covariables en el modelo. Esto sugiere que las observaciones eliminadas estaban afectando la estimación de dicho parámetro.
+
+En conclusión, la exclusión de esas observaciones mejora la calidad del ajuste y la interpretación del modelo, alterarando un poco su estructura general.
+
+## Comparación de normalidad
+
+```{r}
+#| echo: false
+#| warning: false
+#| label: fig-qq-clean
+#| fig-cap: "Gráfico Q-Q para los residuales del Modelo clean"
+#| fig-width: 6
+#| fig-height: 6
+# Test de normalidad Shapiro–Wilk
+test_clean <- shapiro.test(rstudent(modelo_clean))
+
+
+# Modelo clean 
+qqnorm(rstudent(modelo_clean),
+       main = "",
+       cex = 1.5, pch = 19, col = "blue")
+qqline(rstudent(modelo_clean), col = "red", lwd = 2)
+legend("topleft",
+       legend = rbind(c("Statistic W", "p-value"),
+                      round(c(test_clean$statistic, test_clean$p.value), 4)),
+       cex = 0.9, bty = "n")
+```
+
+El supuesto de normalidad de los residuos muestra una ligera disminución en su evidencia estadística, pasando de un valor p=0.8728 a p=0.8487, Sin embargo, esta diferencia es mínima y no representa una pérdida relevante en el cumplimiento del supuesto, ya que el modelo sigue mostrando una excelente adecuación a la normalidad. En contraste, los ajustes realizados aportan mejoras más significativas en otros aspectos del modelo, por lo que este leve descenso en el p-valor se considera un compromiso aceptable dentro del proceso de refinamiento del modelo.
+
+# Análisis de multicolinealidad
+
+## Matriz de correlación de las variables predictoras
+
+```{r}
+#| echo: false
+#| warning: false
+#DIAGNOSTICO DE MULTICOLINEALIDAD 
+cor(num_data_clean[,c(2,5,6)])
+```
+
+Todos los coeficientes de correlación entre las variables independientes son muy bajos (en valor absoluto menores que 0.2), en conclusión según la matriz de correlación, no hay indicios de multicolinealidad entre las variables.
+
+## VIF’s
+
+```{r}
+#| echo: false
+#| warning: false
+vif(modelo_clean)
+```
+
+Todos los VIF son muy cercanos a 1, lo que indica ausencia total de colinealidad.
+
+## Proporciones de varianza y indices de condición
+
+```{r}
+#| echo: false
+#| warning: false
+ols_coll_diag(modelo_clean)
+```
+
+En el diagnóstico de colinealidad mediante el análisis de descomposición de varianza, los índices de condición fueron inferiores a 30, con un valor máximo de 14.03, lo que indica ausencia de colinealidad severa.\
+
+Solo se observa una ligera asociación en el último componente, pero sin dar indicios entre que variables se presente, sin envargo no supera los niveles críticos, en consecuencia, teniendo en cuenta todo lo anterior, el modelo cumple adecuadamente con el supuesto de no multicolinealidad.
+
+# Intervalos de respuesta media y predicción
+
+## Comprobación de los supuestos
+
+```{r}
+#| echo: false
+#| warning: false
+# Normalidad
+shapiro.test(rstudent(modelo_clean))
+
+```
+
+```{r}
+#| echo: false
+#| warning: false
+#| fig-cap: "Gráfico de covariables vs residuos estudentizados para el modelo clean"
+#| fig-width: 8
+#| fig-height: 6
+
+# Residuos estudentizados
+res_clean <- rstudent(modelo_clean)
+
+par(mfrow = c(1,3))  # Tres gráficos en una fila
+
+plot(num_data_clean$x2, res_clean,
+     main = "x2 vs Residuos",
+     xlab = "PERSONAS POR HOGAR",
+     ylab = "Residuos estudentizados",
+     pch = 19, col = "steelblue")
+abline(h = 0, col = "red", lwd = 2)
+
+plot(num_data_clean$x5, res_clean,
+     main = "x5 vs Residuos",
+     xlab = "SUMA ELCSA",
+     ylab = "Residuos estudentizados",
+     pch = 19, col = "darkgreen")
+abline(h = 0, col = "red", lwd = 2)
+
+plot(num_data_clean$x6, res_clean,
+     main = "x6 vs Residuos",
+     xlab = "SISBEN 3",
+     ylab = "Residuos estudentizados",
+     pch = 19, col = "purple")
+abline(h = 0, col = "red", lwd = 2)
+
+par(mfrow = c(1,1))  # Restablecer
+
+```
+
+```{r}
+#| echo: false
+#| warning: false
+#| fig-cap: "Gráfico de valores ajustados vs residuos estudentizados para el modelo clean"
+#| fig-width: 6
+#| fig-height: 6
+
+res_clean <- rstudent(modelo_clean)
+aj_clean  <- modelo_clean$fitted.values
+
+plot(aj_clean, res_clean,
+     main = "Residuos vs Ajustados",
+     xlab = "puntaje de focalización ajustado",
+     ylab = "Residuos estudentizados",
+     pch = 19,
+     col = "darkorange")
+abline(h = 0, col = "red", lwd = 2)
+
+```
+
+La P-H tiene p-valor \> 0.05 por lo que no se rechaza $H_0$, lo que significa que el modelo cumple con el supuestos de normallidad.
+
+De los graficos podemos ver que el modelo clean cumple adecuadamente los supuestos de linealidad, independencia y homocedasticidad, no se observan patrones preocupantes en los residuos, por lo que el modelo es apropiado para fines de inferencia.
+
+## Valores representativos
+
+Para obtener intervalos representativos, se tomaron los valores promedio de las covariables x2, x5, x6 dado que estos reflejan una situación central del conjunto de datos y permiten interpretar el comportamiento esperado del modelo en condiciones típicas.
+
+```{r}
+#| echo: false
+#| warning: false
+# Promedios (valores representativos)
+valores <- data.frame(
+  x2 = mean(num_data_clean$x2, na.rm = TRUE),
+  x5 = mean(num_data_clean$x5, na.rm = TRUE),
+  x6 = mean(num_data_clean$x6, na.rm = TRUE)
+)
+valores
+```
+
+## Extrapolación oculta
+
+```{r}
+#| echo: false
+#| warning: false
+# 1. Base original utilizada para ajustar el modelo
+base <- num_data_clean    
+
+# 2. Obtener rangos observados en los datos originales
+rangos <- data.frame(
+  Variable = names(base),
+  Min = sapply(base, min, na.rm = TRUE),
+  Max = sapply(base, max, na.rm = TRUE)
+)
+
+rangos
+
+# 3. Comparar los valores del data frame 'valores' con los rangos observados
+comparacion <- data.frame(
+  Variable = names(valores),
+  Valor_especificado = as.numeric(valores[1, ]),
+  Min_observado = rangos$Min[match(names(valores), rangos$Variable)],
+  Max_observado = rangos$Max[match(names(valores), rangos$Variable)],
+  Dentro_del_rango = (as.numeric(valores[1, ]) >= rangos$Min[match(names(valores), rangos$Variable)]) &
+                     (as.numeric(valores[1, ]) <= rangos$Max[match(names(valores), rangos$Variable)])
+)
+
+comparacion
+
+```
+
+Se verificó que los valores utilizados para estimar el intervalo de confianza se encuentran dentro de los rangos observados en la base de datos original, por lo cual no existe extrapolación oculta. En consecuencia, la estimación del intervalo de confianza del 90% para la media esperada es válida dentro del dominio de los datos
+
+## Intervalo de confianza para la respuesta media al 90%
+
+$\hat{y}_0 \pm t_{\alpha/2,\, n - p} \times EE(\hat{y}_0)$
+
+```{r}
+#| echo: false
+#| warning: false
+# Intervalo de confianza para la media esperada 
+conf_media <- predict(modelo_clean,
+                      newdata = valores,
+                      interval = "confidence",
+                      level = 0.90)
+conf_media
+
+```
+
+Con un nivel de confianza del 90%, se estima que el valor medio de la respuesta para las condiciones especificadas de las covariables se encuentra entre 75.82277 y 78.24317 unidades.
+
+## Intervalo de predicción al 90%
+
+$\hat{y}_0 \pm t_{\alpha/2,\, n - p} \times \sqrt{EE(\hat{y}_0)^2 + s^2}$
+
+```{r}
+#| echo: false
+#| warning: false
+# Intervalo de prediccion 
+pred_prediccion <- predict(modelo_clean,
+                           newdata = valores,
+                           interval = "prediction",
+                           level = 0.90)
+pred_prediccion
+
+```
+
+Con un nivel de confianza del 90%, se espera que un nuevo valor individual de la variable respuesta para las condiciones especificadas de las covariables se encuentre entre 65.42514 y 88.64079 unidades.
+
+# Creación del modelo con indicadoras
+
+**Categorías:**
+
+```{r}
+#| echo: false
+#| warning: false
+# 1. Identificar automáticamente la variable categórica original
+var_original <- grep("CLASIFICACIÓN", names(data), value = TRUE)
+
+# 2. Agregar al dataset numérico la variable categórica original
+num_data$CLASIFICACION <- as.factor(data[[var_original]])
+
+# 3. Revisar niveles originales
+levels(num_data$CLASIFICACION)
+
+# 4. Renombrar los niveles en el mismo orden
+levels(num_data$CLASIFICACION) <- c("LEVE", "MODERADA", "SEVERA")
+
+# 5. Ajustar el modelo con la covariable x5, clasificación y sus interacciones
+modelo_cat <- lm(x7 ~ x5 * CLASIFICACION, data = num_data)
+
+
+```
+
+Para el modelo fue seleccionada la covariable "SUMA ELCSA"(x5) ya que tiene el coeficiente estandarizado más alto, por lo que es la variable que más aporta a explicar la variabilidad de la respuesta.
+
+# Análisis descriptivo
+
+```{r}
+#| echo: false
+#| warning: false
+#| label: fig-analisis-descriptivo
+#| fig-cap: "Relación entre x5 y Y según Clasificación e interacción (Análisis descriptivo)"
+#| fig-width: 8
+#| fig-height: 6
+
+library(ggplot2)
+
+ggplot(num_data, aes(x = x5, y = x7, color = CLASIFICACION, shape = CLASIFICACION)) +
+  
+  # Puntos
+  geom_point(size = 4, stroke = 1.3) +
+  
+  # Rectas de regresión por categoría
+  geom_smooth(method = "lm", se = FALSE, linewidth = 1.2) +
+  
+  # Estilos personalizados
+  scale_color_manual(values = c("LEVE" = "blue",
+                                "MODERADA" = "black",
+                                "SEVERA" = "green")) +
+  
+  scale_shape_manual(values = c("LEVE" = 1,
+                                "MODERADA" = 17,
+                                "SEVERA" = 3)) +
+  
+  labs(
+    x = "SUMA ELCSA",
+    y = "PUNTAJE TOTAL FOCALIZACIÓN DEFINITIVO",
+    color = "Clasificación",
+    shape = "Clasificación",
+    title = "",
+    subtitle = ""
+  ) +
+  
+  theme_minimal(base_size = 16) +
+  theme(
+    legend.position = "right",
+    plot.title = element_text(face = "bold"),
+    axis.title = element_text(face = "bold")
+  )
+
+
+```
+
+El análisis descriptivo permite explorar visualmente la relación entre la variable SUMA ELCSA (x5) y el PUNTAJE TOTAL DE FOCALIZACIÓN DEFINITIVO (x7), diferenciada para los tres niveles de la variable categórica Clasificación (LEVE, MODERADA y SEVERA). A partir del gráfico se obtienen varias observaciones relevantes para la comprensión del comportamiento de las variables y para la construcción posterior del modelo estadístico.
+
+En primer lugar, se evidencia **una clara separación entre las tres categorías de clasificación**, tanto en el rango de valores de x5 como en los valores asociados de x7. Los hogares clasificados como LEVE se ubican en los niveles más bajos de SUMA ELCSA (aproximadamente entre 3 y 6) y presentan puntajes de focalización entre 50 y 60. Los hogares en clasificación MODERADA se concentran en valores intermedios de x5 (entre 6 y 10), con puntajes x7 principalmente entre 65 y 80, mientras que quienes están en categoría SEVERA muestran los valores más altos de x5 (entre 10 y 15) y puntajes que pueden superar los 90. Esta separación sugiere que la clasificación no es una simple categorización nominal, sino que refleja diferencias reales y consistentes en el comportamiento de las variables.
+
+En segundo lugar, se observa **una variación importante en las pendientes de las rectas de regresión ajustadas para cada categoría**, lo que sugiere la presencia de interacción entre la variable x5 y la variable categórica Clasificación. En particular, los hogares clasificados como LEVE presentan una pendiente negativa, lo que indica que a mayor SUMA ELCSA, menor parece ser el puntaje total de focalización. Para los hogares en categoría MODERADA, la relación entre x5 y x7 es prácticamente plana, reflejando poca sensibilidad del puntaje ante cambios en ELCSA. Por el contrario, los hogares en categoría SEVERA muestran una pendiente claramente positiva, lo cual sugiere que un aumento en SUMA ELCSA está asociado con un incremento importante en el puntaje de focalización. Esta diversidad en las direcciones y magnitudes de las pendientes refuerza la pertinencia de evaluar formalmente el término de interacción en el modelo de regresión.
+
+En tercer lugar, se observan **diferencias considerables en las ordenadas al origen** entre los niveles de Clasificación. Aun cuando x5 toma el mismo valor, el puntaje x7 que se esperaría para cada categoría difiere notablemente: los hogares en clasificación SEVERA parten de valores mucho más altos que los de las otras dos categorías, mientras que LEVE inicia en niveles claramente inferiores. Este comportamiento sugiere que el efecto basal de la clasificación es estadísticamente relevante y debe incluirse explícitamente en el modelo.
+
+Finalmente, el gráfico muestra que **no existe un solapamiento importante entre las tres categorías**, sino que cada una presenta una región bien delimitada del plano. Esto facilita la identificación visual de los grupos y sugiere que la variable Clasificación contiene información útil y significativa para explicar la variabilidad de la variable respuesta. La separación clara entre los conjuntos refuerza la idea de que tanto los interceptos como las pendientes podrían diferir entre categorías, y justifica en términos prácticos y estadísticos la construcción y evaluación de modelos que incluyan efectos principales e interacciones.
+
+# Modelo
+
+```{r}
+#| echo: false
+#| warning: false
+# 6. Resumen del modelo
+summary(modelo_cat)
+```
+
+**modelo cat:** $Y_i = \beta_0 + \beta_1\,X_{i5} + \beta_2\, I_i(\text{MODERADA})+ \beta_3\, I_i(\text{SEVERA})+ \beta_{1,1}\,\big(X_{i5}\, I_i(\text{MODERADA})\big)+ \beta_{1,2}\,\big(X_{i5}\, I_i(\text{SEVERA})\big) + \varepsilon_i$
+
+**modelo estimado:** $\hat{Y_i} = 56.093 - 2.558\,X_{i5 }+ 18.702\, I_i(\text{MODERADA})- 7.367\, I_i(\text{SEVERA})+ 1.932\,\big(X_{i5}\, I_i(\text{MODERADA})\big)+ 4.783\,\big(X_{i5}\, I_i(\text{SEVERA})\big)$
+
+# Comprobación de supuestos
+
+## Normalidad
+
+```{r}
+#| echo: false
+#| warning: false
+#| label: fig-qq-cat
+#| fig-cap: "Gráfico Q-Q por categorias para los residuales del Modelo cat"
+#| fig-width: 6
+#| fig-height: 6
+
+# Residuales estudentizados
+res <- rstudent(modelo_cat)
+
+# Categoría
+cat_var <- modelo_cat$model$CLASIFICACION
+
+# Colores para cada categoría
+colores <- c("LEVE" = "blue", "MODERADA" = "black", "SEVERA" = "green")
+
+# Test de normalidad
+test_simple <- shapiro.test(res)
+
+# Q-Q plot manual para colorear por grupo
+qq <- qqnorm(res, plot.it = FALSE)
+
+plot(qq$x, qq$y,
+     pch = 19,
+     col = colores[cat_var],
+     xlab = "Cuantiles teóricos",
+     ylab = "Residuos estudentizados",
+     main = "")
+
+qqline(res, col = "red", lwd = 2)
+
+# Leyenda
+legend("topleft",
+       legend = c("LEVE", "MODERADA", "SEVERA"),
+       col = colores,
+       pch = 19,
+       bty = "n")
+
+# Estadístico y p-valor
+legend("bottomright",
+       legend = rbind(c("Statistic W", "p-value"),
+                      round(c(test_simple$statistic, test_simple$p.value), 4)),
+       cex = 0.9, bty = "n")
+
+
+
+```
+
+A partir del gráfico Q-Q categorizado y la prueba de Shapiro–Wilk, se puede concluir que el supuesto de normalidad de los residuales se cumple de manera satisfactoria en el modelo con interacción. En primer lugar, se observa que los puntos correspondientes a los tres niveles de la variable *CLASIFICACIÓN* (LEVE, MODERADA y SEVERA) se alinean de forma satisfactoria con la recta teórica de referencia.
+
+Adicionalmente, no se identifican diferencias marcadas entre las tres categorías: todas presentan una distribución de residuales muy similar, lo que sugiere que **el comportamiento del error no depende del nivel de clasificación**, lo cual es deseable para garantizar la validez del modelo.
+
+Por otra parte, aunque en los extremos del gráfico se observan pequeñas desviaciones respecto a la línea diagonal, estas son esperables en muestras finitas y no representan violaciones relevantes del supuesto.
+
+Finalmente, la prueba de normalidad de Shapiro–Wilk (W = 0.9904, *p*-value = 0.6975) respalda cuantitativamente lo observado visualmente. El *p*-valor es considerablemente mayor a 0.05, por lo que **no se rechaza la hipótesis de normalidad**.
+
+En conjunto, tanto la evidencia gráfica como la prueba formal permiten afirmar que el supuesto de normalidad se cumple de manera adecuada para este modelo, y que los residuales presentan un comportamiento apropiado y consistente entre los diferentes niveles de la variable categórica.
+
+## Varianza constante
+
+```{r}
+#| echo: false
+#| warning: false
+#| label: fig-residuos-ajustados-cat
+#| fig-cap: "Gráfico por categorias de residuos estudentizados vs valores ajustados del modelo cat"
+#| fig-width: 6
+#| fig-height: 6
+
+# Residuos estudentizados y valores ajustados
+res <- rstudent(modelo_cat)
+aj  <- modelo_cat$fitted.values
+
+# Categoría
+cat_var <- modelo_cat$model$CLASIFICACION
+
+# Colores para cada categoría
+colores <- c("LEVE" = "blue", "MODERADA" = "black", "SEVERA" = "green")
+
+# Gráfico
+plot(aj, res,
+     main = "",
+     xlab = "Puntaje de focalización ajustado",
+     ylab = "Residuos estudentizados",
+     pch = 19,
+     col = colores[cat_var])
+
+abline(h = 0, col = "red", lwd = 2)
+
+# Leyenda
+legend("topleft",
+       legend = c("LEVE", "MODERADA", "SEVERA"),
+       col = colores,
+       pch = 19,
+       bty = "n")
+
+
+
+
+
+```
+
+El gráfico de residuos estudiantilizados no muestra patrones sistemáticos ni tendencias, lo cual indica que la relación funcional del modelo está correctamente especificada. La dispersión vertical es similar entre categorías, por lo que no se observan indicios de heterocedasticidad
+
+# Comprobación de diferencias en los interceptos de las categorías
+
+$H_0: \beta_2 = \beta_3 = 0$
+
+$H_1: \beta_2$ ó $\beta_3 \neq  0$
+
+```{r}
+#| echo: false
+#| warning: false
+linearHypothesis(
+  modelo_cat,
+  c("CLASIFICACIONMODERADA = 0",
+    "CLASIFICACIONSEVERA = 0")
+)
+```
+
+**No se rechaza la hipótesis nula,** con un p-valor=0.1224, por lo que no hay evidencia estadísticamente suficiente para afirmar que las ordenadas al origen son diferentes entre los niveles de CLASIFICACIÓN (LEVE, MODERADA, SEVERA).
+
+Las rectas ajustadas para los tres niveles de la variable categórica parecen partir de una altura inicial similar, es decir, la respuesta promedio cuando $X=0$ no muestra diferencias significativas entre los grupos.
+
+Aunque los coeficientes del modelo sí presentan diferencias numéricas entre interceptos, estas diferencias no son lo suficientemente grandes como para considerarse estadísticamente significativas.
+
+# Comprobación de diferencia en las pendientes de las rectas
+
+$H_0: \beta_{1,1} = \beta_{1,2} = 0$
+
+$H_1: \beta_{1,1}$ ó $\beta_{1,2} \neq  0$
+
+```{r}
+#| echo: false
+#| warning: false
+# Prueba conjunta de que las interacciones (pendientes extra) son cero
+linearHypothesis(modelo_cat,
+                 c("x5:CLASIFICACIONMODERADA = 0",
+                   "x5:CLASIFICACIONSEVERA = 0"))
+
+```
+
+**Se rechaza la hipótesis nula**, con un p-valor= 0.03025, por lo cual existe evidencia estadisticamente significativa de que las pendientes de las rectas de regresión no son iguales entre los niveles de CLASIFICACIÓN (LEVE, MODERADA, SEVERA).
+
+-   La variación de **"**PUNTAJE TOTAL FOCALIZACIÓN DEFINITIVO" por unidad de cambio en "SUMA ELCSA" no es la misma para hogares LEVES, MODERADOS y SEVEROS.
+
+-   Las categorías interactúan significativamente con "SUMA ELCSA" , lo que confirma que el modelo con interacción es adecuado.
+
+# Prueba de suma de cuadrados extra con test lineal general
+
+Teniendo en cuenta que anteriormente tuvimos los resultados de que los interceptos eran estadisticamente iguales y las pendientes no son estadisticamente iguales pero con un p-valor muy cercano a 0.05, por esto mismo nos interesa probar si al relacionar los 2 interceptos con una de las pendientes seguira siendo significativa, en otras palabras, nos interesa determinar si la combinación de estos efectos aunque individualmente no todos sean significativos podría generar un aporte estadísticamente relevante en el ajuste global.
+
+$H_0: \beta_2 =\beta_3 = \beta_{1,1}  =0$
+
+$H_1: \beta_2$ ó $\beta_3$ ó $\beta_{1,1}\neq  0$
+
+```{r}
+#| echo: false
+#| warning: false
+# Modelo reducido: sólo x5
+modelo_reducido <- lm(x7 ~ x5, data = num_data)
+
+# Modelo completo: x5 * CLASIFICACION (main + interacciones)
+modelo_completo <- lm(x7 ~ x5 * CLASIFICACION, data = num_data)
+
+# Hipótesis conjunta: los cuatro coeficientes ligados a CLASIFICACION son cero
+linearHypothesis(modelo_completo,
+  c("CLASIFICACIONMODERADA = 0",
+    "CLASIFICACIONSEVERA = 0",
+    "x5:CLASIFICACIONMODERADA = 0")
+)
+
+```
+
+Como el p-valor=0.0006309 \< 0.05 **se rechaza la hipótesis nula,** Existe evidencia estadísticamente significativa para afirmar que la variable CLASIFICACIÓN, en conjunto con su primera interaccion con "SUMA ELCSA", **mejora el ajuste del modelo**.
+
+En otras palabras, aunque algunos efectos individuales no hayan resultado significativos por separado, **su efecto combinado sí mejora el modelo de regresión**, lo cual justifica incluir estos términos dentro del modelo final.
+
+# Comprobación de diferencia en las rectas por cada nivel
+
+$H_0: \beta_2 = \beta_3 = \beta_{1,1} = \beta_{1,2} =0$
+
+$H_1: \beta_2$ ó $\beta_3$ ó $\beta_{1,1}$ ó $\beta_{1,2} \neq  0$
+
+```{r}
+#| echo: false
+#| warning: false
+# Modelo reducido: sólo x5
+modelo_reducido <- lm(x7 ~ x5, data = num_data)
+
+# Modelo completo: x5 * CLASIFICACION (main + interacciones)
+modelo_completo <- lm(x7 ~ x5 * CLASIFICACION, data = num_data)
+
+# Hipótesis conjunta: los cuatro coeficientes ligados a CLASIFICACION son cero
+linearHypothesis(modelo_completo,
+  c("CLASIFICACIONMODERADA = 0",
+    "CLASIFICACIONSEVERA = 0",
+    "x5:CLASIFICACIONMODERADA = 0",
+    "x5:CLASIFICACIONSEVERA = 0")
+)
+```
+
+Como el p-valor=0.001629 \< 0.05 **se rechaza la hipótesis nula,** Existe evidencia estadísticamente significativa para afirmar que la variable CLASIFICACIÓN, en conjunto con sus interacciones con "SUMA ELCSA", **mejora el ajuste del modelo**.
+
+Es decir, las rectas de regresión que representan la relación entre "SUMA ELCSA" y "PUNTAJE TOTAL FOCALIZACIÓN DEFINITIVO" **no son iguales entre categorías**, presentando diferencias en interceptos y/o pendientes.
+
+# Referencias:
+
+-   **Departamento Nacional de Planeación (DNP). (2021). *Metodología SISBÉN IV: Documento técnico*. Bogotá, Colombia. Recuperado de <https://www.sisben.gov.co>**
