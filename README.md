@@ -1,3 +1,5 @@
+<img width="612" height="538" alt="image" src="https://github.com/user-attachments/assets/3d64ee5d-5e01-4263-ad47-e95a70cfa33b" />
+
 # Regresión Lineal Múltiple – Puntaje SISBÉN IV
 
 Análisis estadístico completo en R para modelar el puntaje de 
