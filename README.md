@@ -1,8 +1,9 @@
 <img width="612" height="538" alt="image" src="https://github.com/user-attachments/assets/3d64ee5d-5e01-4263-ad47-e95a70cfa33b" />
-> 🇬🇧 **English summary:** Multiple linear regression model to predict 
-> socioeconomic scores (SISBÉN IV) for Colombian households. 
-> Built with R using LASSO, Stepwise selection, and full 
-> assumption diagnostics. R²=0.52 on real government data.
+
+- 🇬🇧 **English summary:** Multiple linear regression model to predict 
+- socioeconomic scores (SISBÉN IV) for Colombian households. 
+- Built with R using LASSO, Stepwise selection, and full 
+- assumption diagnostics. R²=0.52 on real government data.
 
 # Regresión Lineal Múltiple – Puntaje SISBÉN IV
 
